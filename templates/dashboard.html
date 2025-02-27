@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            text-align: center;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+        .section {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .crypto {
+            background-color: #dff0d8;
+        }
+        .racing {
+            background-color: #d9edf7;
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .start {
+            background-color: green;
+            color: white;
+        }
+        .stop {
+            background-color: red;
+            color: white;
+        }
+        .buy {
+            background-color: blue;
+            color: white;
+        }
+        .sell {
+            background-color: orange;
+            color: white;
+        }
+        .bet {
+            background-color: purple;
+            color: white;
+        }
+    </style>
+    <script>
+        function autoRefresh() {
+            setTimeout(() => {
+                location.reload();
+            }, 10000); // Refresh every 10 seconds
+        }
+        window.onload = autoRefresh;
+
+        function placeTrade(trade_type, price, volume) {
+            fetch('/place_trade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trade_type, price, volume })
+            }).then(response => response.json()).then(data => alert(JSON.stringify(data)));
+        }
+
+        function placeBet(market_id, selection_id, stake, price) {
+            fetch('/place_bet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ market_id, selection_id, stake, price })
+            }).then(response => response.json()).then(data => alert(JSON.stringify(data)));
+        }
+    </script>
+</head>
+<body>
+
+    <h1>Bot Dashboard</h1>
+
+    <div class="container">
+
+        <div class="section crypto">
+            <h2>Crypto Trading</h2>
+            {% if crypto.BTC_GBP %}
+                <p><strong>Bitcoin:</strong> £{{ crypto.BTC_GBP }}</p>
+                <button class="buy" onclick="placeTrade('buy', '{{ crypto.BTC_GBP }}', 0.01)">Buy 0.01 BTC</button>
+                <button class="sell" onclick="placeTrade('sell', '{{ crypto.BTC_GBP }}', 0.01)">Sell 0.01 BTC</button>
+            {% else %}
+                <p class="error">⚠️ Error fetching crypto data</p>
+            {% endif %}
+        </div>
+
+        <div class="section racing">
+            <h2>Horse Racing Betting</h2>
+            {% if horse_racing and horse_racing|length > 0 %}
+                <ul>
+                    {% for race in horse_racing %}
+                        <li>
+                            <strong>{{ race.get('marketName', 'Unknown') }}</strong>
+                            <button class="bet" onclick="placeBet('{{ race.marketId }}', '{{ race.runners[0].selectionId }}', 5, 2.0)">
+                                Bet £5 at 2.0 odds
+                            </button>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="error">⚠️ Horse racing data unavailable</p>
+            {% endif %}
+        </div>
+
+        <h2>Mining Controls</h2>
+        <form action="/start_mining" method="post">
+            <button class="start" type="submit">Start Mining</button>
+        </form>
+        <form action="/stop_mining" method="post">
+            <button class="stop" type="submit">Stop Mining</button>
+        </form>
+
+    </div>
+
+</body>
+</html>
