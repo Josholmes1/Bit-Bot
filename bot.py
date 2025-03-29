@@ -50,9 +50,10 @@ KRAKEN_BALANCE_URL = "https://api.kraken.com/0/private/Balance"
 KRAKEN_COPY_TRADERS_URL = "https://api.kraken.com/0/public/Trades"
 
 # ✅ Define Discord Channel IDs
-CRYPTO_PRICES_CHANNEL_ID = 123456789012345678
-TRADE_ALERTS_CHANNEL_ID = 123456789012345678
-TWITTER_UPDATES_CHANNEL_ID = 123456789012345678
+# Replace these with actual channel IDs from your Discord server
+CRYPTO_PRICES_CHANNEL_ID = 123456789012345678  # e.g., #crypto-prices
+TRADE_ALERTS_CHANNEL_ID = 123456789012345678   # e.g., #trade-alerts
+TWITTER_UPDATES_CHANNEL_ID = 123456789012345678  # e.g., #twitter-updates
 
 # ✅ Kraken Signature Function
 def get_kraken_signature(url_path, data, secret):
@@ -80,11 +81,26 @@ async def log_to_discord(channel_id, message):
     if channel:
         await channel.send(message)
 
-price_data = {"BTCGBP": 30000, "XRPGBP": 0.5, "DOGEUSD": 0.1}  # Example
+price_data = {}
+
+async def update_live_prices():
+    while True:
+        for pair in ["BTCGBP", "XRPGBP", "DOGEUSD"]:
+            try:
+                url = f"https://api.kraken.com/0/public/Ticker?pair={pair}"
+                response = requests.get(url)
+                result = response.json().get("result", {})
+                key = list(result.keys())[0] if result else None
+                if key:
+                    price_data[pair] = float(result[key]['c'][0])
+            except Exception as e:
+                print(f"Error fetching price for {pair}: {e}")
+        await asyncio.sleep(30)  # Update every 30 seconds
 
 class AITrading:
     def __init__(self):
-        self.model = self.build_model()
+        self.feature_count = 6
+        self.model = self.build_model()  # Price, Sentiment, RSI, EMA, Volume, MACD
         self.scaler = MinMaxScaler()
         self.historical_prices = {"BTCGBP": [], "XRPGBP": [], "DOGEUSD": []}
         self.sentiment_scores = []
@@ -103,7 +119,7 @@ class AITrading:
 
     def build_model(self):
         model = Sequential([
-            LSTM(50, return_sequences=True, input_shape=(50, 1)),
+            LSTM(50, return_sequences=True, input_shape=(50, self.feature_count)),
             LSTM(50, return_sequences=False),
             Dense(25, activation='relu'),
             Dense(1)
@@ -160,17 +176,52 @@ class AITrading:
                 self.historical_prices[pair].append(price)
 
                 if len(self.historical_prices[pair]) > 60:
-                    prices_array = np.array(self.historical_prices[pair][-60:]).reshape(-1, 1)
-                    scaled_prices = self.scaler.fit_transform(prices_array)
-                    X = np.array([scaled_prices[i:i+50] for i in range(10)])
-                    y = np.array([scaled_prices[i+50] for i in range(10)])
+                    sentiment = self.sentiment_scores[-1] if self.sentiment_scores else 0
+                    price_list = self.historical_prices[pair][-60:]
+                    sentiment_list = [sentiment] * len(price_list)
+                    rsi_series = pd.Series(price_list).diff()
+                    gain = rsi_series.where(rsi_series > 0, 0.0)
+                    loss = -rsi_series.where(rsi_series < 0, 0.0)
+                    avg_gain = gain.rolling(window=14, min_periods=14).mean()
+                    avg_loss = loss.rolling(window=14, min_periods=14).mean()
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
+                    rsi_filled = rsi.fillna(50).tolist()
+
+                    # EMA (Exponential Moving Average)
+                    ema = pd.Series(price_list).ewm(span=10, adjust=False).mean().fillna(method='bfill').tolist()
+
+                    # MACD (Moving Average Convergence Divergence)
+                    ema_12 = pd.Series(price_list).ewm(span=12, adjust=False).mean()
+                    ema_26 = pd.Series(price_list).ewm(span=26, adjust=False).mean()
+                    macd_line = ema_12 - ema_26
+                    macd = macd_line.fillna(0).tolist()
+
+                    # Real volume from Kraken (placeholder logic)
+                    volume = []
+                    try:
+                        for symbol in [pair]:
+                            url = f"https://api.kraken.com/0/public/OHLC?pair={symbol}&interval=1"
+                            response = requests.get(url)
+                            ohlc = response.json().get("result")
+                            if ohlc:
+                                key = next(iter(ohlc))
+                                volume_data = [float(candle[6]) for candle in ohlc[key][-60:]]
+                                volume = volume_data if len(volume_data) >= 60 else [np.mean(volume_data)] * 60
+                            else:
+                                volume = [1000] * 60
+                    except Exception as e:
+                        print(f"Volume fetch error: {e}")
+                        volume = [1000] * 60
+    
+                    combined = np.array([[p, sentiment_list[i], rsi_filled[i], ema[i], volume[i], macd[i]] for i, p in enumerate(price_list)])
+                    scaled = self.scaler.fit_transform(combined)
+                    X = np.array([scaled[i:i+50] for i in range(10)])
+                    y = np.array([scaled[i+50][0] for i in range(10)])
 
                     self.model.fit(X, y, epochs=3, batch_size=1, verbose=0)
-                    prediction = self.model.predict(X[-1].reshape(1, 50, 1))[0][0]
-                    predicted_price = self.scaler.inverse_transform([[prediction]])[0][0]
-
-                    if self.sentiment_scores and self.sentiment_scores[-1] > 0:
-                        predicted_price *= 1.01
+                    prediction = self.model.predict(X[-1].reshape(1, 50, self.feature_count))[0][0]
+                    predicted_price = self.scaler.inverse_transform([[prediction, sentiment, rsi_filled[-1], ema[-1], volume[-1], macd[-1]]])[0][0]
 
                     if pair in self.positions:
                         buy_price = self.positions[pair]["buy_price"]
@@ -213,6 +264,7 @@ ai_trader = AITrading()
 
 @bot.event
 async def on_ready():
+    asyncio.create_task(update_live_prices())
     print(f"✅ Logged in as {bot.user}")
     asyncio.create_task(ai_trader.trading_logic())
     asyncio.create_task(ai_trader.send_twitter_updates())
