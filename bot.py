@@ -1,147 +1,239 @@
-import requests
+import requests 
 import json
 import time
 import hashlib
 import hmac
 import base64
-from flask import Flask, render_template, request, jsonify
 import threading
+import os
+import pandas as pd
+import numpy as np
+import websockets
+import asyncio
+import tweepy
+import csv
+from dotenv import load_dotenv
+from flask import Flask
+import discord
+from discord.ext import commands, tasks
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.linear_model import LinearRegression
+import pygame
+from urllib.parse import urlencode
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from keras.optimizers import Adam
+from textblob import TextBlob
 
+# ✅ Load Environment Variables Correctly
+load_dotenv()
+
+KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
+KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+
+# ✅ Flask Setup
 app = Flask(__name__)
 
-# ✅ Betfair API Configuration
-BETFAIR_API_URL = "https://api.betfair.com/exchange/betting/rest/v1.0/listMarketCatalogue/"
-BETFAIR_BET_URL = "https://api.betfair.com/exchange/betting/rest/v1.0/placeOrders/"
-BETFAIR_API_KEY = "your_betfair_api_key"
-SESSION_TOKEN = "your_betfair_session_token"
+@app.route("/")
+def home():
+    return "Flask server is running!"
+
+# ✅ Initialize pygame mixer for sound
+pygame.mixer.init()
 
 # ✅ Kraken API Configuration
-KRAKEN_API_KEY = "your_kraken_api_key"
-KRAKEN_API_SECRET = "your_kraken_api_secret"
 KRAKEN_TRADE_URL = "https://api.kraken.com/0/private/AddOrder"
+KRAKEN_BALANCE_URL = "https://api.kraken.com/0/private/Balance"
+KRAKEN_COPY_TRADERS_URL = "https://api.kraken.com/0/public/Trades"
 
-# ✅ Fetch Horse Racing Data from Betfair
-def fetch_horse_racing_data():
-    headers = {
-        "X-Application": BETFAIR_API_KEY,
-        "X-Authentication": SESSION_TOKEN,
-        "Content-Type": "application/json"
-    }
+# ✅ Define Discord Channel IDs
+CRYPTO_PRICES_CHANNEL_ID = 123456789012345678
+TRADE_ALERTS_CHANNEL_ID = 123456789012345678
+TWITTER_UPDATES_CHANNEL_ID = 123456789012345678
 
-    params = {
-        "filter": {
-            "eventTypeIds": ["7"],  # Horse Racing
-            "marketCountries": ["GB"],  # UK Races
-            "marketTypeCodes": ["WIN"],  # Win Markets
-            "maxResults": "5"
-        }
-    }
+# ✅ Kraken Signature Function
+def get_kraken_signature(url_path, data, secret):
+    post_data = urlencode(data)
+    encoded = (data['nonce'] + post_data).encode()
+    message = url_path.encode() + hashlib.sha256(encoded).digest()
+    mac = hmac.new(base64.b64decode(secret), message, hashlib.sha512)
+    sigdigest = base64.b64encode(mac.digest())
+    return sigdigest.decode()
 
-    response = requests.post(BETFAIR_API_URL, headers=headers, json=params)
+# ✅ Discord Bot Setup
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            return data if isinstance(data, list) else []
-        except json.JSONDecodeError:
-            return []
-    
-    return []
+# ✅ Placeholder: Replace with your own implementation
+def get_available_balance():
+    return {"BTC": 0.1, "XRP": 500, "DOGE": 1000}
 
-# ✅ Place a Bet on Betfair
-def place_bet(market_id, selection_id, stake, price):
-    headers = {
-        "X-Application": BETFAIR_API_KEY,
-        "X-Authentication": SESSION_TOKEN,
-        "Content-Type": "application/json"
-    }
+def place_trade(pair, side, volume):
+    print(f"Simulated {side.upper()} trade for {volume} of {pair}")
 
-    payload = {
-        "marketId": market_id,
-        "instructions": [
-            {
-                "selectionId": selection_id,
-                "side": "BACK",
-                "orderType": "LIMIT",
-                "limitOrder": {
-                    "size": stake,
-                    "price": price,
-                    "persistenceType": "LAPSE"
-                }
-            }
-        ]
-    }
+async def log_to_discord(channel_id, message):
+    channel = bot.get_channel(channel_id)
+    if channel:
+        await channel.send(message)
 
-    response = requests.post(BETFAIR_BET_URL, headers=headers, json=payload)
+price_data = {"BTCGBP": 30000, "XRPGBP": 0.5, "DOGEUSD": 0.1}  # Example
 
-    if response.status_code == 200:
-        return response.json()
-    return {"error": "Failed to place bet"}
+class AITrading:
+    def __init__(self):
+        self.model = self.build_model()
+        self.scaler = MinMaxScaler()
+        self.historical_prices = {"BTCGBP": [], "XRPGBP": [], "DOGEUSD": []}
+        self.sentiment_scores = []
+        self.positions = {}
+        self.trading_active = False
+        self.challenge_mode = False
+        self.challenge_start_balance = 100
+        self.challenge_balance = 100
+        self.challenge_history = []
 
-# ✅ Fetch Crypto Price from Kraken
-def fetch_crypto_price():
-    response = requests.get("https://api.kraken.com/0/public/Ticker?pair=XBTGBP")
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            btc_price = data["result"]["XXBTZGBP"]["c"][0]  # Last trade price
-            return {"BTC_GBP": btc_price}
-        except KeyError:
-            return {"error": "Invalid response from Kraken API"}
-    return {"error": "Failed to fetch crypto data"}
+    def build_model(self):
+        model = Sequential([
+            LSTM(50, return_sequences=True, input_shape=(50, 1)),
+            LSTM(50, return_sequences=False),
+            Dense(25, activation='relu'),
+            Dense(1)
+        ])
+        model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
+        return model
 
-# ✅ Place a Trade on Kraken
-def place_trade(pair, trade_type, price, volume):
-    nonce = str(int(time.time() * 1000))
-    data = {
-        "nonce": nonce,
-        "ordertype": "limit",
-        "type": trade_type,  # "buy" or "sell"
-        "price": str(price),
-        "volume": str(volume),
-        "pair": pair
-    }
+    def analyze_sentiment(self, tweets):
+        sentiments = [TextBlob(tweet).sentiment.polarity for tweet in tweets]
+        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
+        self.sentiment_scores.append(avg_sentiment)
 
-    uri_path = "/0/private/AddOrder"
-    post_data = "&".join([f"{key}={value}" for key, value in data.items()])
-    message = uri_path.encode() + hashlib.sha256(nonce.encode() + post_data.encode()).digest()
-    signature = hmac.new(base64.b64decode(KRAKEN_API_SECRET), message, hashlib.sha512).digest()
-    api_signature = base64.b64encode(signature).decode()
+    async def send_twitter_updates(self):
+        while True:
+            headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
+            url = f"https://api.twitter.com/2/tweets/search/recent?query=crypto&max_results=5"
+            response = requests.get(url, headers=headers)
 
-    headers = {
-        "API-Key": KRAKEN_API_KEY,
-        "API-Sign": api_signature
-    }
+            if response.status_code == 200:
+                tweets = [tweet['text'] for tweet in response.json().get("data", [])]
+                twitter_channel = bot.get_channel(TWITTER_UPDATES_CHANNEL_ID)
+                if twitter_channel:
+                    for tweet in tweets:
+                        await twitter_channel.send(f"🐦 **Crypto Twitter Update:** {tweet}")
 
-    response = requests.post(KRAKEN_TRADE_URL, headers=headers, data=data)
-    return response.json()
+            await asyncio.sleep(180)
 
-# ✅ Flask Routes
-@app.route('/')
-def dashboard():
-    horse_racing_data = fetch_horse_racing_data()
-    crypto_data = fetch_crypto_price()
-    return render_template('dashboard.html', horse_racing=horse_racing_data, crypto=crypto_data)
+    def update_challenge_balance(self, pair, price, side, size):
+        if self.challenge_mode:
+            if side == "buy":
+                self.challenge_balance -= size * price
+            else:
+                self.challenge_balance += size * price
+            self.challenge_history.append(f"{side.upper()} {pair} at {price:.2f} | Sim Bal: £{self.challenge_balance:.2f}")
 
-@app.route('/place_bet', methods=['POST'])
-def betting():
-    data = request.json
-    market_id = data['market_id']
-    selection_id = data['selection_id']
-    stake = data['stake']
-    price = data['price']
-    result = place_bet(market_id, selection_id, stake, price)
-    return jsonify(result)
+    async def trading_logic(self):
+        while True:
+            if not self.trading_active:
+                await asyncio.sleep(5)
+                continue
 
-@app.route('/place_trade', methods=['POST'])
-def trading():
-    data = request.json
-    trade_type = data['trade_type']
-    price = data['price']
-    volume = data['volume']
-    result = place_trade("XBTGBP", trade_type, price, volume)
-    return jsonify(result)
+            for pair in ["BTCGBP", "XRPGBP", "DOGEUSD"]:
+                if pair not in price_data:
+                    continue
 
-# ✅ Run Flask App
-if __name__ == '__main__':
-    app.run(debug=True)
+                price = price_data[pair]
+                self.historical_prices[pair].append(price)
+
+                if len(self.historical_prices[pair]) > 60:
+                    prices_array = np.array(self.historical_prices[pair][-60:]).reshape(-1, 1)
+                    scaled_prices = self.scaler.fit_transform(prices_array)
+                    X = np.array([scaled_prices[i:i+50] for i in range(10)])
+                    y = np.array([scaled_prices[i+50] for i in range(10)])
+
+                    self.model.fit(X, y, epochs=3, batch_size=1, verbose=0)
+                    prediction = self.model.predict(X[-1].reshape(1, 50, 1))[0][0]
+                    predicted_price = self.scaler.inverse_transform([[prediction]])[0][0]
+
+                    if self.sentiment_scores and self.sentiment_scores[-1] > 0:
+                        predicted_price *= 1.01
+
+                    if pair in self.positions:
+                        buy_price = self.positions[pair]["buy_price"]
+                        if price < buy_price * 0.98:
+                            await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"❗ Stop-loss triggered on {pair}")
+                            place_trade(pair, "sell", self.positions[pair]["size"])
+                            self.update_challenge_balance(pair, price, "sell", self.positions[pair]["size"])
+                            del self.positions[pair]
+                            continue
+                        elif price > buy_price * 1.05:
+                            await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"💰 Profit target hit on {pair}")
+                            place_trade(pair, "sell", self.positions[pair]["size"])
+                            self.update_challenge_balance(pair, price, "sell", self.positions[pair]["size"])
+                            del self.positions[pair]
+                            continue
+
+                    balance = get_available_balance()
+                    base_asset = pair.replace("GBP", "").replace("USD", "")
+                    trade_size = float(balance.get(base_asset, 0)) * 0.2
+
+                    if predicted_price > price and pair not in self.positions:
+                        place_trade(pair, "buy", trade_size)
+                        self.positions[pair] = {"buy_price": price, "size": trade_size}
+                        self.update_challenge_balance(pair, price, "buy", trade_size)
+                        await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"📈 Bought {trade_size} of {pair} at {price:.2f}")
+                    elif predicted_price < price and pair in self.positions:
+                        place_trade(pair, "sell", self.positions[pair]["size"])
+                        self.update_challenge_balance(pair, price, "sell", self.positions[pair]["size"])
+                        await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"📉 Sold {self.positions[pair]['size']} of {pair} at {price:.2f}")
+                        del self.positions[pair]
+
+            await asyncio.sleep(60)
+
+ai_trader = AITrading()
+
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
+    asyncio.create_task(ai_trader.trading_logic())
+    asyncio.create_task(ai_trader.send_twitter_updates())
+
+@bot.command()
+async def start_trading(ctx):
+    ai_trader.trading_active = True
+    await ctx.send("🟢 Trading started.")
+
+@bot.command()
+async def stop_trading(ctx):
+    ai_trader.trading_active = False
+    await ctx.send("🔴 Trading stopped.")
+
+@bot.command()
+async def trading_stats(ctx):
+    stats = "\n".join([f"{pair}: {price_data.get(pair, 'N/A')}" for pair in ["BTCGBP", "XRPGBP", "DOGEUSD"]])
+    sentiment = ai_trader.sentiment_scores[-1] if ai_trader.sentiment_scores else 'N/A'
+    await ctx.send(f"📊 **Current Prices:**\n{stats}\n\n📈 **Sentiment Score:** {sentiment}")
+
+@bot.command()
+async def start_challenge(ctx):
+    ai_trader.challenge_mode = True
+    ai_trader.challenge_balance = ai_trader.challenge_start_balance
+    ai_trader.challenge_history.clear()
+    await ctx.send("🏁 Challenge Mode activated! Bot will now try to grow a simulated £1000.")
+
+@bot.command()
+async def stop_challenge(ctx):
+    ai_trader.challenge_mode = False
+    await ctx.send("🛑 Challenge Mode stopped.")
+
+@bot.command()
+async def challenge_status(ctx):
+    if not ai_trader.challenge_mode:
+        await ctx.send("⚠️ Challenge Mode is not active.")
+        return
+    log = "\n".join(ai_trader.challenge_history[-5:]) or "No trades yet."
+    await ctx.send(f"📈 **Challenge Balance:** £{ai_trader.challenge_balance:.2f}\n📘 Last Trades:\n{log}")
+
+if __name__ == "__main__":
+    threading.Thread(target=app.run, kwargs={"debug": True, "use_reloader": False}).start()
+    bot.run(DISCORD_BOT_TOKEN)
