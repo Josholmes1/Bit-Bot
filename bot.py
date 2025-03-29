@@ -24,6 +24,7 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense
 from keras.optimizers import Adam
 from textblob import TextBlob
+from datetime import datetime
 
 # ✅ Load Environment Variables Correctly
 load_dotenv()
@@ -93,6 +94,12 @@ class AITrading:
         self.challenge_start_balance = 100
         self.challenge_balance = 100
         self.challenge_history = []
+        self.last_trade_time = {}
+        self.cooldown_seconds = 180
+        self.csv_file = "trade_history.csv"
+        with open(self.csv_file, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Timestamp", "Pair", "Side", "Price", "Size", "Simulated Balance"])
 
     def build_model(self):
         model = Sequential([
@@ -104,15 +111,10 @@ class AITrading:
         model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
         return model
 
-    def analyze_sentiment(self, tweets):
-        sentiments = [TextBlob(tweet).sentiment.polarity for tweet in tweets]
-        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
-        self.sentiment_scores.append(avg_sentiment)
-
     async def send_twitter_updates(self):
         while True:
             headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
-            url = f"https://api.twitter.com/2/tweets/search/recent?query=crypto&max_results=5"
+            url = "https://api.twitter.com/2/tweets/search/recent?query=crypto&max_results=5"
             response = requests.get(url, headers=headers)
 
             if response.status_code == 200:
@@ -124,6 +126,15 @@ class AITrading:
 
             await asyncio.sleep(180)
 
+    def analyze_sentiment(self, tweets):
+        sentiments = [TextBlob(tweet).sentiment.polarity for tweet in tweets]
+        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
+        self.sentiment_scores.append(avg_sentiment)
+
+    def can_trade(self, pair):
+        now = time.time()
+        return pair not in self.last_trade_time or now - self.last_trade_time[pair] > self.cooldown_seconds
+
     def update_challenge_balance(self, pair, price, side, size):
         if self.challenge_mode:
             if side == "buy":
@@ -131,6 +142,9 @@ class AITrading:
             else:
                 self.challenge_balance += size * price
             self.challenge_history.append(f"{side.upper()} {pair} at {price:.2f} | Sim Bal: £{self.challenge_balance:.2f}")
+            with open(self.csv_file, mode='a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), pair, side.upper(), f"{price:.2f}", size, f"{self.challenge_balance:.2f}"])
 
     async def trading_logic(self):
         while True:
@@ -173,6 +187,9 @@ class AITrading:
                             del self.positions[pair]
                             continue
 
+                    if not self.can_trade(pair):
+                        continue
+
                     balance = get_available_balance()
                     base_asset = pair.replace("GBP", "").replace("USD", "")
                     trade_size = float(balance.get(base_asset, 0)) * 0.2
@@ -180,11 +197,13 @@ class AITrading:
                     if predicted_price > price and pair not in self.positions:
                         place_trade(pair, "buy", trade_size)
                         self.positions[pair] = {"buy_price": price, "size": trade_size}
+                        self.last_trade_time[pair] = time.time()
                         self.update_challenge_balance(pair, price, "buy", trade_size)
                         await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"📈 Bought {trade_size} of {pair} at {price:.2f}")
                     elif predicted_price < price and pair in self.positions:
                         place_trade(pair, "sell", self.positions[pair]["size"])
                         self.update_challenge_balance(pair, price, "sell", self.positions[pair]["size"])
+                        self.last_trade_time[pair] = time.time()
                         await log_to_discord(TRADE_ALERTS_CHANNEL_ID, f"📉 Sold {self.positions[pair]['size']} of {pair} at {price:.2f}")
                         del self.positions[pair]
 
@@ -219,7 +238,7 @@ async def start_challenge(ctx):
     ai_trader.challenge_mode = True
     ai_trader.challenge_balance = ai_trader.challenge_start_balance
     ai_trader.challenge_history.clear()
-    await ctx.send("🏁 Challenge Mode activated! Bot will now try to grow a simulated £1000.")
+    await ctx.send("🏁 Challenge Mode activated! Bot will now try to grow a simulated £100.")
 
 @bot.command()
 async def stop_challenge(ctx):
