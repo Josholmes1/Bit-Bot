@@ -51,9 +51,10 @@ KRAKEN_COPY_TRADERS_URL = "https://api.kraken.com/0/public/Trades"
 
 # ✅ Define Discord Channel IDs
 # Replace these with actual channel IDs from your Discord server
-CRYPTO_PRICES_CHANNEL_ID = 123456789012345678  # e.g., #crypto-prices
-TRADE_ALERTS_CHANNEL_ID = 123456789012345678   # e.g., #trade-alerts
-TWITTER_UPDATES_CHANNEL_ID = 123456789012345678  # e.g., #twitter-updates
+CRYPTO_PRICES_CHANNEL_ID = 112233445566778899  # e.g., #crypto-prices
+TRADE_ALERTS_CHANNEL_ID = 112233445566778900   # e.g., #trading-signals or trade-execution
+TWITTER_UPDATES_CHANNEL_ID = 112233445566778901  # e.g., #bot-logs or a dedicated Twitter channel
+BOT_LOGS_CHANNEL_ID = 1346250904268968147  # e.g., #bot-logs  # e.g., #twitter-updates
 
 # ✅ Kraken Signature Function
 def get_kraken_signature(url_path, data, secret):
@@ -81,9 +82,30 @@ async def log_to_discord(channel_id, message):
     if channel:
         await channel.send(message)
 
+async def log_bot_event(message):
+    channel = bot.get_channel(BOT_LOGS_CHANNEL_ID)
+    if channel:
+        await channel.send(f"📘 {message}")
+
 price_data = {}
 
 async def update_live_prices():
+    async def post_prices_to_discord():
+        while True:
+            if price_data:
+                try:
+                    price_message = "💹 **Live Prices Update**\n" + "\n".join(
+                        [f"{pair}: {price_data.get(pair, 'N/A')}" for pair in ["BTCGBP", "XRPGBP", "DOGEUSD"]]
+                    )
+                    channel = bot.get_channel(CRYPTO_PRICES_CHANNEL_ID)
+                    if channel:
+                        await channel.send(price_message)
+                except Exception as e:
+                    print(f"Error posting live prices: {e}")
+            await asyncio.sleep(600)  # every 10 minutes
+
+    asyncio.create_task(post_prices_to_discord())
+
     while True:
         for pair in ["BTCGBP", "XRPGBP", "DOGEUSD"]:
             try:
@@ -264,6 +286,7 @@ ai_trader = AITrading()
 
 @bot.event
 async def on_ready():
+    await log_bot_event("Bot is now online and ready!")
     asyncio.create_task(update_live_prices())
     print(f"✅ Logged in as {bot.user}")
     asyncio.create_task(ai_trader.trading_logic())
@@ -271,11 +294,13 @@ async def on_ready():
 
 @bot.command()
 async def start_trading(ctx):
+    await log_bot_event("Trading manually started via Discord command.")
     ai_trader.trading_active = True
     await ctx.send("🟢 Trading started.")
 
 @bot.command()
 async def stop_trading(ctx):
+    await log_bot_event("Trading manually stopped via Discord command.")
     ai_trader.trading_active = False
     await ctx.send("🔴 Trading stopped.")
 
@@ -287,6 +312,7 @@ async def trading_stats(ctx):
 
 @bot.command()
 async def start_challenge(ctx):
+    await log_bot_event("Challenge Mode activated via Discord.")
     ai_trader.challenge_mode = True
     ai_trader.challenge_balance = ai_trader.challenge_start_balance
     ai_trader.challenge_history.clear()
@@ -294,6 +320,7 @@ async def start_challenge(ctx):
 
 @bot.command()
 async def stop_challenge(ctx):
+    await log_bot_event("Challenge Mode deactivated via Discord.")
     ai_trader.challenge_mode = False
     await ctx.send("🛑 Challenge Mode stopped.")
 
